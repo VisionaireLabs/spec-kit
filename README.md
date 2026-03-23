@@ -17,6 +17,67 @@
 
 ---
 
+> **This is the [Visionaire Labs](https://visionaire.co) fork of [github/spec-kit](https://github.com/github/spec-kit).**
+> We track upstream and maintain the **Visionaire Labs preset** — an opinionated SDD configuration for our stack.
+> See [`presets/visionaire-labs/`](./presets/visionaire-labs/) for details.
+
+---
+
+## 🧠 Visionaire Labs Preset
+
+We use Spec-Driven Development for every feature we build at [Visionaire Labs](https://visionaire.co). This fork ships with an opinionated preset that encodes our engineering principles directly into the SDD workflow.
+
+```bash
+# After specify init, install our preset:
+specify preset add --dev ./presets/visionaire-labs
+```
+
+### What the preset enforces
+
+```
+✦ TypeScript strict mode        — non-negotiable, constitution-level
+✦ Aesthetics are mandatory      — spec template requires visual direction, empty/error/loading states
+✦ AI-native data structures     — every spec documents where AI reads and writes
+✦ Scope discipline              — "Won't Have" list required in every spec
+✦ Stack defaults                — Next.js 15 · Tailwind · shadcn/ui · Vercel · pnpm
+✦ Solana-aware                  — wallet/token principles when applicable
+✦ Quality gates                 — build + lint + typecheck must pass before merge
+```
+
+### Visionaire Labs SDD Workflow
+
+```mermaid
+flowchart TD
+    A["🏛️ /speckit.constitution\nEstablish governing principles\n(TypeScript, aesthetics, stack defaults)"] --> B
+    B["📋 /speckit.specify\nDefine WHAT to build\n(user stories, aesthetics, AI surface area, scope)"] --> C
+    C["🔍 /speckit.clarify\nFill ambiguities\n(optional but recommended)"] --> D
+    D["🗺️ /speckit.plan\nDefine HOW to build it\n(Next.js · Tailwind · Vercel · Prisma)"] --> E
+    E["✅ /speckit.tasks\nGenerate ordered task list\n(parallel markers, dependency tracking)"] --> F
+    F["🚀 /speckit.implement\nClaude Code executes\n(verified build · zero TypeScript errors · Vercel deploy)"]
+
+    style A fill:#1a1a2e,color:#e0e0e0,stroke:#4a4a8a
+    style B fill:#1a1a2e,color:#e0e0e0,stroke:#4a4a8a
+    style C fill:#1a1a2e,color:#e0e0e0,stroke:#4a4a8a
+    style D fill:#1a1a2e,color:#e0e0e0,stroke:#4a4a8a
+    style E fill:#1a1a2e,color:#e0e0e0,stroke:#4a4a8a
+    style F fill:#0d3320,color:#e0e0e0,stroke:#2d8a5a
+```
+
+### Preset files
+
+| File | Purpose |
+|------|---------|
+| [`preset.yml`](./presets/visionaire-labs/preset.yml) | Manifest |
+| [`templates/constitution-template.md`](./presets/visionaire-labs/templates/constitution-template.md) | 8 non-negotiable engineering principles |
+| [`templates/spec-template.md`](./presets/visionaire-labs/templates/spec-template.md) | Spec with aesthetics + AI surface area sections |
+| [`templates/plan-template.md`](./presets/visionaire-labs/templates/plan-template.md) | Plan defaulting to our stack + Vercel deployment |
+| [`commands/speckit.constitution.md`](./presets/visionaire-labs/commands/speckit.constitution.md) | Constitution command tuned for our principles |
+| [`commands/speckit.specify.md`](./presets/visionaire-labs/commands/speckit.specify.md) | Spec command enforcing aesthetics + scope discipline |
+
+---
+
+---
+
 ## Table of Contents
 
 - [🤔 What is Spec-Driven Development?](#-what-is-spec-driven-development)
