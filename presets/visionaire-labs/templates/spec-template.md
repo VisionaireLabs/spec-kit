@@ -1,137 +1,128 @@
 # Feature Specification: [FEATURE NAME]
 
-**Feature Branch**: `[###-feature-name]`
-**Created**: [DATE]
-**Status**: Draft
+**Feature Branch**: `[###-feature-name]`  
+**Created**: [DATE]  
+**Status**: Draft  
 **Input**: User description: "$ARGUMENTS"
 
----
+## User Scenarios & Testing *(mandatory)*
 
-## What We're Building
+<!--
+  IMPORTANT: User stories should be PRIORITIZED as user journeys ordered by importance.
+  Each user story/journey must be INDEPENDENTLY TESTABLE - meaning if you implement just ONE of them,
+  you should still have a viable MVP (Minimum Viable Product) that delivers value.
+  
+  Assign priorities (P1, P2, P3, etc.) to each story, where P1 is the most critical.
+  Think of each story as a standalone slice of functionality that can be:
+  - Developed independently
+  - Tested independently
+  - Deployed independently
+  - Demonstrated to users independently
+-->
 
-[One paragraph. Plain English. What is this, and why does it matter to the user? No technical jargon here — just what it does and who it's for.]
+### User Story 1 - [Brief Title] (Priority: P1)
 
----
+[Describe this user journey in plain language]
 
-## User Stories *(mandatory — ordered by priority)*
+**Why this priority**: [Explain the value and why it has this priority level]
 
-Each story must be independently shippable. If you implemented only this one story, would it be a working, demo-able thing? It should be.
-
-### User Story 1 — [Brief Title] (P1)
-
-[Describe the user journey in plain language. What does the user want to accomplish?]
-
-**Why P1**: [Why this is the core thing — what breaks if this isn't done?]
-
-**Ships alone as**: [What minimal version of this is demo-able? Describe it concretely.]
-
-**Acceptance Scenarios**:
-
-1. **Given** [state], **When** [action], **Then** [outcome]
-2. **Given** [state], **When** [action], **Then** [outcome]
-
----
-
-### User Story 2 — [Brief Title] (P2)
-
-[User journey description]
-
-**Why P2**: [What value does this add beyond P1?]
-
-**Ships alone as**: [Minimal demo-able version]
+**Independent Test**: [Describe how this can be tested independently - e.g., "Can be fully tested by [specific action] and delivers [specific value]"]
 
 **Acceptance Scenarios**:
 
-1. **Given** [state], **When** [action], **Then** [outcome]
+1. **Given** [initial state], **When** [action], **Then** [expected outcome]
+2. **Given** [initial state], **When** [action], **Then** [expected outcome]
 
 ---
 
-### User Story 3 — [Brief Title] (P3)
+### User Story 2 - [Brief Title] (Priority: P2)
 
-[User journey description]
+[Describe this user journey in plain language]
 
-**Why P3**: [What value does this add?]
+**Why this priority**: [Explain the value and why it has this priority level]
 
-**Ships alone as**: [Minimal demo-able version]
+**Independent Test**: [Describe how this can be tested independently]
 
 **Acceptance Scenarios**:
 
-1. **Given** [state], **When** [action], **Then** [outcome]
+1. **Given** [initial state], **When** [action], **Then** [expected outcome]
 
 ---
 
-[Add more stories as needed]
+### User Story 3 - [Brief Title] (Priority: P3)
+
+[Describe this user journey in plain language]
+
+**Why this priority**: [Explain the value and why it has this priority level]
+
+**Independent Test**: [Describe how this can be tested independently]
+
+**Acceptance Scenarios**:
+
+1. **Given** [initial state], **When** [action], **Then** [expected outcome]
 
 ---
 
-## Aesthetic & Experience Requirements
+[Add more user stories as needed, each with an assigned priority]
 
-<!-- This section is mandatory for any user-facing feature -->
+### Edge Cases
 
-### Visual Direction
-- **Tone**: [e.g., "clean and minimal", "bold and high-contrast", "editorial"]
-- **Key UI moments**: [e.g., "empty state should feel intentional, not blank", "loading states must feel alive"]
-- **Animation**: [e.g., "none", "subtle fade transitions", "full page transitions on navigation"]
-- **Dark mode**: [Required / Optional / Not applicable]
+<!--
+  ACTION REQUIRED: The content in this section represents placeholders.
+  Fill them out with the right edge cases.
+-->
 
-### Edge Cases That Must Feel Good
-- Empty state: [What does the user see when there's no data yet?]
-- Error state: [How do errors surface — inline, toast, modal?]
-- Loading state: [Skeleton? Spinner? Progressive reveal?]
+- What happens when [boundary condition]?
+- How does system handle [error scenario]?
 
----
+## Requirements *(mandatory)*
 
-## AI Surface Area *(if applicable)*
+<!--
+  ACTION REQUIRED: The content in this section represents placeholders.
+  Fill them out with the right functional requirements.
+-->
 
-<!-- Fill this in if the feature interacts with AI in any way -->
+### Functional Requirements
 
-- **Where AI reads this data**: [e.g., "agent reads task list to prioritize work"]
-- **Where AI writes to this feature**: [e.g., "agent posts summaries to feed"]
-- **Semantic requirements**: [e.g., "status fields must use descriptive strings, not numeric codes"]
-- **LLM-legibility notes**: [e.g., "include `description` on all entity types"]
+- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
+- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
+- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
+- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
+- **FR-005**: System MUST [behavior, e.g., "log all security events"]
 
----
+*Example of marking unclear requirements:*
 
-## Functional Requirements *(mandatory)*
+- **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
+- **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
-### Must Have (blocks launch)
-- **FR-001**: [Specific capability — be concrete]
-- **FR-002**: [Specific capability]
-- **FR-003**: [Specific capability]
+### Key Entities *(include if feature involves data)*
 
-### Should Have (important but not blocking)
-- **FR-004**: [Capability]
-- **FR-005**: [Capability]
-
-### Won't Have (explicitly out of scope)
-- [Thing we are NOT building in this iteration — prevents scope creep]
-
-### Key Entities *(if feature involves data)*
-
-| Entity | Description | Key Fields |
-|--------|-------------|------------|
-| [Entity 1] | [What it represents] | [id, name, ...] |
-| [Entity 2] | [What it represents] | [id, ...] |
-
----
+- **[Entity 1]**: [What it represents, key attributes without implementation]
+- **[Entity 2]**: [What it represents, relationships to other entities]
 
 ## Success Criteria *(mandatory)*
 
-How do we know this shipped successfully?
+<!--
+  ACTION REQUIRED: Define measurable success criteria.
+  These must be technology-agnostic and measurable.
+-->
 
-- **SC-001**: [Measurable outcome — e.g., "User can complete X in under 30 seconds"]
-- **SC-002**: [Measurable outcome — e.g., "Page loads under 1.5s on mobile"]
-- **SC-003**: [Aesthetic outcome — e.g., "Design review sign-off from Thor"]
-- **SC-004**: [Technical outcome — e.g., "Vercel build passes, zero TypeScript errors"]
+### Measurable Outcomes
 
----
+- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
+- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
+- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
+- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
 
-## Review & Acceptance Checklist
+## Assumptions
 
-- [ ] All P1 user stories have concrete acceptance scenarios
-- [ ] Aesthetic requirements are specified (not just "make it look good")
-- [ ] Empty, error, and loading states are defined
-- [ ] Out-of-scope items are explicitly listed
-- [ ] Success criteria are measurable
-- [ ] AI surface area documented (or marked N/A)
-- [ ] No NEEDS CLARIFICATION items remain
+<!--
+  ACTION REQUIRED: The content in this section represents placeholders.
+  Fill them out with the right assumptions based on reasonable defaults
+  chosen when the feature description did not specify certain details.
+-->
+
+- [Assumption about target users, e.g., "Users have stable internet connectivity"]
+- [Assumption about scope boundaries, e.g., "Mobile support is out of scope for v1"]
+- [Assumption about data/environment, e.g., "Existing authentication system will be reused"]
+- [Dependency on existing system/service, e.g., "Requires access to the existing user profile API"]
