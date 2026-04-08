@@ -14,6 +14,17 @@ $ARGUMENTS
 
 You **MUST** consider the user input before proceeding (if not empty).
 
+## Pre-Execution Checks
+
+**Check for extension hooks (before constitution update)**:
+- Check if `.specify/extensions.yml` exists in the project root.
+- If it exists, read it and look for entries under the `hooks.before_constitution` key.
+- Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
+- For each hook without a `condition` field (or with null/empty condition), execute it based on its `optional` flag:
+  - **Optional hook** (`optional: true`): Surface it as an optional pre-hook to run.
+  - **Mandatory hook** (`optional: false`): Execute it automatically before proceeding.
+- If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently.
+
 ## Outline
 
 You are creating or updating the project constitution at `.specify/memory/constitution.md`. The Visionaire Labs preset provides an opinionated template — your job is to fill it with project-specific values while preserving all non-negotiable principles.
@@ -62,3 +73,14 @@ Follow this execution flow:
 - No bracketed placeholders left in the final output (except intentionally deferred TODO items)
 - Each principle: a clear heading + declarative rules (MUST/MUST NOT, not "should")
 - Keep the document scannable — bullet lists over paragraphs where possible
+
+## Post-Execution Checks
+
+**Check for extension hooks (after constitution update)**:
+- Check if `.specify/extensions.yml` exists in the project root.
+- If it exists, read it and look for entries under the `hooks.after_constitution` key.
+- Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
+- For each hook without a `condition` field (or with null/empty condition), execute it based on its `optional` flag:
+  - **Optional hook** (`optional: true`): Surface it as an optional post-hook to run.
+  - **Mandatory hook** (`optional: false`): Execute it automatically.
+- If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently.
