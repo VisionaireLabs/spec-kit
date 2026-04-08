@@ -604,6 +604,31 @@ def _locate_core_pack() -> Path | None:
     return None
 
 
+def _locate_bundled_extension(extension_id: str) -> Path | None:
+    """Return the path to a bundled extension, or None.
+
+    Checks the wheel's core_pack first, then falls back to the
+    source-checkout ``extensions/<id>/`` directory.
+    """
+    import re as _re
+    if not _re.match(r'^[a-z0-9-]+$', extension_id):
+        return None
+
+    core = _locate_core_pack()
+    if core is not None:
+        candidate = core / "extensions" / extension_id
+        if (candidate / "extension.yml").is_file():
+            return candidate
+
+    # Source-checkout / editable install: look relative to repo root
+    repo_root = Path(__file__).parent.parent.parent
+    candidate = repo_root / "extensions" / extension_id
+    if (candidate / "extension.yml").is_file():
+        return candidate
+
+    return None
+
+
 def _install_shared_infra(
     project_path: Path,
     script_type: str,
@@ -1287,7 +1312,7 @@ def init(
         step_num = 2
 
     # Determine skill display mode for the next-steps panel.
-    # Skills integrations (codex, kimi, agy) should show skill invocation syntax.
+    # Skills integrations (codex, kimi, agy, trae) should show skill invocation syntax.
     from .integrations.base import SkillsIntegration as _SkillsInt
     _is_skills_integration = isinstance(resolved_integration, _SkillsInt)
 
@@ -1295,7 +1320,8 @@ def init(
     claude_skill_mode = selected_ai == "claude" and (ai_skills or _is_skills_integration)
     kimi_skill_mode = selected_ai == "kimi"
     agy_skill_mode = selected_ai == "agy" and _is_skills_integration
-    native_skill_mode = codex_skill_mode or claude_skill_mode or kimi_skill_mode or agy_skill_mode
+    trae_skill_mode = selected_ai == "trae"
+    native_skill_mode = codex_skill_mode or claude_skill_mode or kimi_skill_mode or agy_skill_mode or trae_skill_mode
 
     if codex_skill_mode and not ai_skills:
         # Integration path installed skills; show the helpful notice
@@ -1307,7 +1333,7 @@ def init(
     usage_label = "skills" if native_skill_mode else "slash commands"
 
     def _display_cmd(name: str) -> str:
-        if codex_skill_mode or agy_skill_mode:
+        if codex_skill_mode or agy_skill_mode or trae_skill_mode:
             return f"$speckit-{name}"
         if claude_skill_mode:
             return f"/speckit-{name}"
@@ -3024,45 +3050,58 @@ def extension_add(
                         zip_path.unlink()
 
             else:
-                # Install from catalog
-                catalog = ExtensionCatalog(project_root)
+                # Try bundled extensions first (shipped with spec-kit)
+                bundled_path = _locate_bundled_extension(extension)
+                if bundled_path is not None:
+                    manifest = manager.install_from_directory(bundled_path, speckit_version, priority=priority)
+                else:
+                    # Install from catalog (also resolves display names to IDs)
+                    catalog = ExtensionCatalog(project_root)
 
-                # Check if extension exists in catalog (supports both ID and display name)
-                ext_info, catalog_error = _resolve_catalog_extension(extension, catalog, "add")
-                if catalog_error:
-                    console.print(f"[red]Error:[/red] Could not query extension catalog: {catalog_error}")
-                    raise typer.Exit(1)
-                if not ext_info:
-                    console.print(f"[red]Error:[/red] Extension '{extension}' not found in catalog")
-                    console.print("\nSearch available extensions:")
-                    console.print("  specify extension search")
-                    raise typer.Exit(1)
+                    # Check if extension exists in catalog (supports both ID and display name)
+                    ext_info, catalog_error = _resolve_catalog_extension(extension, catalog, "add")
+                    if catalog_error:
+                        console.print(f"[red]Error:[/red] Could not query extension catalog: {catalog_error}")
+                        raise typer.Exit(1)
+                    if not ext_info:
+                        console.print(f"[red]Error:[/red] Extension '{extension}' not found in catalog")
+                        console.print("\nSearch available extensions:")
+                        console.print("  specify extension search")
+                        raise typer.Exit(1)
 
-                # Enforce install_allowed policy
-                if not ext_info.get("_install_allowed", True):
-                    catalog_name = ext_info.get("_catalog_name", "community")
-                    console.print(
-                        f"[red]Error:[/red] '{extension}' is available in the "
-                        f"'{catalog_name}' catalog but installation is not allowed from that catalog."
-                    )
-                    console.print(
-                        f"\nTo enable installation, add '{extension}' to an approved catalog "
-                        f"(install_allowed: true) in .specify/extension-catalogs.yml."
-                    )
-                    raise typer.Exit(1)
+                    # If catalog resolved a display name to an ID, check bundled again
+                    resolved_id = ext_info['id']
+                    if resolved_id != extension:
+                        bundled_path = _locate_bundled_extension(resolved_id)
+                        if bundled_path is not None:
+                            manifest = manager.install_from_directory(bundled_path, speckit_version, priority=priority)
 
-                # Download extension ZIP (use resolved ID, not original argument which may be display name)
-                extension_id = ext_info['id']
-                console.print(f"Downloading {ext_info['name']} v{ext_info.get('version', 'unknown')}...")
-                zip_path = catalog.download_extension(extension_id)
+                    if bundled_path is None:
+                        # Enforce install_allowed policy
+                        if not ext_info.get("_install_allowed", True):
+                            catalog_name = ext_info.get("_catalog_name", "community")
+                            console.print(
+                                f"[red]Error:[/red] '{extension}' is available in the "
+                                f"'{catalog_name}' catalog but installation is not allowed from that catalog."
+                            )
+                            console.print(
+                                f"\nTo enable installation, add '{extension}' to an approved catalog "
+                                f"(install_allowed: true) in .specify/extension-catalogs.yml."
+                            )
+                            raise typer.Exit(1)
 
-                try:
-                    # Install from downloaded ZIP
-                    manifest = manager.install_from_zip(zip_path, speckit_version, priority=priority)
-                finally:
-                    # Clean up downloaded ZIP
-                    if zip_path.exists():
-                        zip_path.unlink()
+                        # Download extension ZIP (use resolved ID, not original argument which may be display name)
+                        extension_id = ext_info['id']
+                        console.print(f"Downloading {ext_info['name']} v{ext_info.get('version', 'unknown')}...")
+                        zip_path = catalog.download_extension(extension_id)
+
+                        try:
+                            # Install from downloaded ZIP
+                            manifest = manager.install_from_zip(zip_path, speckit_version, priority=priority)
+                        finally:
+                            # Clean up downloaded ZIP
+                            if zip_path.exists():
+                                zip_path.unlink()
 
         console.print("\n[green]✓[/green] Extension installed successfully!")
         console.print(f"\n[bold]{manifest.name}[/bold] (v{manifest.version})")
