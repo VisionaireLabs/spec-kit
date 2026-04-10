@@ -621,6 +621,31 @@ def _locate_bundled_extension(extension_id: str) -> Path | None:
     return None
 
 
+def _locate_bundled_preset(preset_id: str) -> Path | None:
+    """Return the path to a bundled preset, or None.
+
+    Checks the wheel's core_pack first, then falls back to the
+    source-checkout ``presets/<id>/`` directory.
+    """
+    import re as _re
+    if not _re.match(r'^[a-z0-9-]+$', preset_id):
+        return None
+
+    core = _locate_core_pack()
+    if core is not None:
+        candidate = core / "presets" / preset_id
+        if (candidate / "preset.yml").is_file():
+            return candidate
+
+    # Source-checkout / editable install: look relative to repo root
+    repo_root = Path(__file__).parent.parent.parent
+    candidate = repo_root / "presets" / preset_id
+    if (candidate / "preset.yml").is_file():
+        return candidate
+
+    return None
+
+
 def _install_shared_infra(
     project_path: Path,
     script_type: str,
@@ -1266,27 +1291,44 @@ def init(
                     preset_manager = PresetManager(project_path)
                     speckit_ver = get_speckit_version()
 
-                    # Try local directory first, then catalog
+                    # Try local directory first, then bundled, then catalog
                     local_path = Path(preset).resolve()
                     if local_path.is_dir() and (local_path / "preset.yml").exists():
                         preset_manager.install_from_directory(local_path, speckit_ver)
                     else:
-                        preset_catalog = PresetCatalog(project_path)
-                        pack_info = preset_catalog.get_pack_info(preset)
-                        if not pack_info:
-                            console.print(f"[yellow]Warning:[/yellow] Preset '{preset}' not found in catalog. Skipping.")
+                        bundled_path = _locate_bundled_preset(preset)
+                        if bundled_path:
+                            preset_manager.install_from_directory(bundled_path, speckit_ver)
                         else:
-                            try:
-                                zip_path = preset_catalog.download_pack(preset)
-                                preset_manager.install_from_zip(zip_path, speckit_ver)
-                                # Clean up downloaded ZIP to avoid cache accumulation
+                            preset_catalog = PresetCatalog(project_path)
+                            pack_info = preset_catalog.get_pack_info(preset)
+                            if not pack_info:
+                                console.print(f"[yellow]Warning:[/yellow] Preset '{preset}' not found in catalog. Skipping.")
+                            elif pack_info.get("bundled") and not pack_info.get("download_url"):
+                                from .extensions import REINSTALL_COMMAND
+                                console.print(
+                                    f"[yellow]Warning:[/yellow] Preset '{preset}' is bundled with spec-kit "
+                                    f"but could not be found in the installed package."
+                                )
+                                console.print(
+                                    "This usually means the spec-kit installation is incomplete or corrupted."
+                                )
+                                console.print(f"Try reinstalling: {REINSTALL_COMMAND}")
+                            else:
+                                zip_path = None
                                 try:
-                                    zip_path.unlink(missing_ok=True)
-                                except OSError:
-                                    # Best-effort cleanup; failure to delete is non-fatal
-                                    pass
-                            except PresetError as preset_err:
-                                console.print(f"[yellow]Warning:[/yellow] Failed to install preset '{preset}': {preset_err}")
+                                    zip_path = preset_catalog.download_pack(preset)
+                                    preset_manager.install_from_zip(zip_path, speckit_ver)
+                                except PresetError as preset_err:
+                                    console.print(f"[yellow]Warning:[/yellow] Failed to install preset '{preset}': {preset_err}")
+                                finally:
+                                    if zip_path is not None:
+                                        # Clean up downloaded ZIP to avoid cache accumulation
+                                        try:
+                                            zip_path.unlink(missing_ok=True)
+                                        except OSError:
+                                            # Best-effort cleanup; failure to delete is non-fatal
+                                            pass
                 except Exception as preset_err:
                     console.print(f"[yellow]Warning:[/yellow] Failed to install preset: {preset_err}")
 
@@ -1338,7 +1380,7 @@ def init(
         step_num = 2
 
     # Determine skill display mode for the next-steps panel.
-    # Skills integrations (codex, kimi, agy, trae) should show skill invocation syntax.
+    # Skills integrations (codex, kimi, agy, trae, cursor-agent) should show skill invocation syntax.
     from .integrations.base import SkillsIntegration as _SkillsInt
     _is_skills_integration = isinstance(resolved_integration, _SkillsInt)
 
@@ -1347,7 +1389,8 @@ def init(
     kimi_skill_mode = selected_ai == "kimi"
     agy_skill_mode = selected_ai == "agy" and _is_skills_integration
     trae_skill_mode = selected_ai == "trae"
-    native_skill_mode = codex_skill_mode or claude_skill_mode or kimi_skill_mode or agy_skill_mode or trae_skill_mode
+    cursor_agent_skill_mode = selected_ai == "cursor-agent" and (ai_skills or _is_skills_integration)
+    native_skill_mode = codex_skill_mode or claude_skill_mode or kimi_skill_mode or agy_skill_mode or trae_skill_mode or cursor_agent_skill_mode
 
     if codex_skill_mode and not ai_skills:
         # Integration path installed skills; show the helpful notice
@@ -1355,6 +1398,9 @@ def init(
         step_num += 1
     if claude_skill_mode and not ai_skills:
         steps_lines.append(f"{step_num}. Start Claude in this project directory; spec-kit skills were installed to [cyan].claude/skills[/cyan]")
+        step_num += 1
+    if cursor_agent_skill_mode and not ai_skills:
+        steps_lines.append(f"{step_num}. Start Cursor Agent in this project directory; spec-kit skills were installed to [cyan].cursor/skills[/cyan]")
         step_num += 1
     usage_label = "skills" if native_skill_mode else "slash commands"
 
@@ -1365,6 +1411,8 @@ def init(
             return f"/speckit-{name}"
         if kimi_skill_mode:
             return f"/skill:speckit-{name}"
+        if cursor_agent_skill_mode:
+            return f"/speckit-{name}"
         return f"/speckit.{name}"
 
     steps_lines.append(f"{step_num}. Start using {usage_label} with your AI agent:")
@@ -2134,28 +2182,50 @@ def preset_add(
             console.print(f"[green]✓[/green] Preset '{manifest.name}' v{manifest.version} installed (priority {priority})")
 
         elif pack_id:
-            catalog = PresetCatalog(project_root)
-            pack_info = catalog.get_pack_info(pack_id)
-
-            if not pack_info:
-                console.print(f"[red]Error:[/red] Preset '{pack_id}' not found in catalog")
-                raise typer.Exit(1)
-
-            if not pack_info.get("_install_allowed", True):
-                catalog_name = pack_info.get("_catalog_name", "unknown")
-                console.print(f"[red]Error:[/red] Preset '{pack_id}' is from the '{catalog_name}' catalog which is discovery-only (install not allowed).")
-                console.print("Add the catalog with --install-allowed or install from the preset's repository directly with --from.")
-                raise typer.Exit(1)
-
-            console.print(f"Installing preset [cyan]{pack_info.get('name', pack_id)}[/cyan]...")
-
-            try:
-                zip_path = catalog.download_pack(pack_id)
-                manifest = manager.install_from_zip(zip_path, speckit_version, priority)
+            # Try bundled preset first, then catalog
+            bundled_path = _locate_bundled_preset(pack_id)
+            if bundled_path:
+                console.print(f"Installing bundled preset [cyan]{pack_id}[/cyan]...")
+                manifest = manager.install_from_directory(bundled_path, speckit_version, priority)
                 console.print(f"[green]✓[/green] Preset '{manifest.name}' v{manifest.version} installed (priority {priority})")
-            finally:
-                if 'zip_path' in locals() and zip_path.exists():
-                    zip_path.unlink(missing_ok=True)
+            else:
+                catalog = PresetCatalog(project_root)
+                pack_info = catalog.get_pack_info(pack_id)
+
+                if not pack_info:
+                    console.print(f"[red]Error:[/red] Preset '{pack_id}' not found in catalog")
+                    raise typer.Exit(1)
+
+                # Bundled presets should have been caught above; if we reach
+                # here the bundled files are missing from the installation.
+                if pack_info.get("bundled") and not pack_info.get("download_url"):
+                    from .extensions import REINSTALL_COMMAND
+                    console.print(
+                        f"[red]Error:[/red] Preset '{pack_id}' is bundled with spec-kit "
+                        f"but could not be found in the installed package."
+                    )
+                    console.print(
+                        "\nThis usually means the spec-kit installation is incomplete or corrupted."
+                    )
+                    console.print("Try reinstalling spec-kit:")
+                    console.print(f"  {REINSTALL_COMMAND}")
+                    raise typer.Exit(1)
+
+                if not pack_info.get("_install_allowed", True):
+                    catalog_name = pack_info.get("_catalog_name", "unknown")
+                    console.print(f"[red]Error:[/red] Preset '{pack_id}' is from the '{catalog_name}' catalog which is discovery-only (install not allowed).")
+                    console.print("Add the catalog with --install-allowed or install from the preset's repository directly with --from.")
+                    raise typer.Exit(1)
+
+                console.print(f"Installing preset [cyan]{pack_info.get('name', pack_id)}[/cyan]...")
+
+                try:
+                    zip_path = catalog.download_pack(pack_id)
+                    manifest = manager.install_from_zip(zip_path, speckit_version, priority)
+                    console.print(f"[green]✓[/green] Preset '{manifest.name}' v{manifest.version} installed (priority {priority})")
+                finally:
+                    if 'zip_path' in locals() and zip_path.exists():
+                        zip_path.unlink(missing_ok=True)
         else:
             console.print("[red]Error:[/red] Specify a preset ID, --from URL, or --dev path")
             raise typer.Exit(1)
@@ -3001,7 +3071,7 @@ def extension_add(
     priority: int = typer.Option(10, "--priority", help="Resolution priority (lower = higher precedence, default 10)"),
 ):
     """Install an extension."""
-    from .extensions import ExtensionManager, ExtensionCatalog, ExtensionError, ValidationError, CompatibilityError
+    from .extensions import ExtensionManager, ExtensionCatalog, ExtensionError, ValidationError, CompatibilityError, REINSTALL_COMMAND
 
     project_root = Path.cwd()
 
@@ -3103,6 +3173,19 @@ def extension_add(
                             manifest = manager.install_from_directory(bundled_path, speckit_version, priority=priority)
 
                     if bundled_path is None:
+                        # Bundled extensions without a download URL must come from the local package
+                        if ext_info.get("bundled") and not ext_info.get("download_url"):
+                            console.print(
+                                f"[red]Error:[/red] Extension '{ext_info['id']}' is bundled with spec-kit "
+                                f"but could not be found in the installed package."
+                            )
+                            console.print(
+                                "\nThis usually means the spec-kit installation is incomplete or corrupted."
+                            )
+                            console.print("Try reinstalling spec-kit:")
+                            console.print(f"  {REINSTALL_COMMAND}")
+                            raise typer.Exit(1)
+
                         # Enforce install_allowed policy
                         if not ext_info.get("_install_allowed", True):
                             catalog_name = ext_info.get("_catalog_name", "community")
