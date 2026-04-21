@@ -351,8 +351,16 @@ def show_banner():
     console.print(Align.center(Text(TAGLINE, style="italic bright_yellow")))
     console.print()
 
+def _version_callback(value: bool):
+    if value:
+        console.print(f"specify {get_speckit_version()}")
+        raise typer.Exit()
+
 @app.callback()
-def callback(ctx: typer.Context):
+def callback(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-V", callback=_version_callback, is_eager=True, help="Show version and exit."),
+):
     """Show banner when no subcommand is provided."""
     if ctx.invoked_subcommand is None and "--help" not in sys.argv and "-h" not in sys.argv:
         show_banner()
@@ -1253,15 +1261,11 @@ def init(
             manifest.save()
 
             # Write .specify/integration.json
-            script_ext = "sh" if selected_script == "sh" else "ps1"
             integration_json = project_path / ".specify" / "integration.json"
             integration_json.parent.mkdir(parents=True, exist_ok=True)
             integration_json.write_text(json.dumps({
                 "integration": resolved_integration.key,
                 "version": get_speckit_version(),
-                "scripts": {
-                    "update-context": f".specify/integrations/{resolved_integration.key}/scripts/update-context.{script_ext}",
-                },
             }, indent=2) + "\n", encoding="utf-8")
 
             tracker.complete("integration", resolved_integration.config.get("name", resolved_integration.key))
@@ -1365,6 +1369,7 @@ def init(
                 "ai": selected_ai,
                 "integration": resolved_integration.key,
                 "branch_numbering": branch_numbering or "sequential",
+                "context_file": resolved_integration.context_file,
                 "here": here,
                 "preset": preset,
                 "script": selected_script,
@@ -1729,18 +1734,13 @@ def _read_integration_json(project_root: Path) -> dict[str, Any]:
 def _write_integration_json(
     project_root: Path,
     integration_key: str,
-    script_type: str,
 ) -> None:
     """Write ``.specify/integration.json`` for *integration_key*."""
-    script_ext = "sh" if script_type == "sh" else "ps1"
     dest = project_root / INTEGRATION_JSON
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps({
         "integration": integration_key,
         "version": get_speckit_version(),
-        "scripts": {
-            "update-context": f".specify/integrations/{integration_key}/scripts/update-context.{script_ext}",
-        },
     }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1775,7 +1775,9 @@ def _resolve_script_type(project_root: Path, script_type: str | None) -> str:
 
 
 @integration_app.command("list")
-def integration_list():
+def integration_list(
+    catalog: bool = typer.Option(False, "--catalog", help="Browse full catalog (built-in + community)"),
+):
     """List available integrations and installed status."""
     from .integrations import INTEGRATION_REGISTRY
 
@@ -1789,6 +1791,50 @@ def integration_list():
 
     current = _read_integration_json(project_root)
     installed_key = current.get("integration")
+
+    if catalog:
+        from .integrations.catalog import IntegrationCatalog, IntegrationCatalogError
+
+        ic = IntegrationCatalog(project_root)
+        try:
+            entries = ic.search()
+        except IntegrationCatalogError as exc:
+            console.print(f"[red]Error:[/red] {exc}")
+            raise typer.Exit(1)
+
+        if not entries:
+            console.print("[yellow]No integrations found in catalog.[/yellow]")
+            return
+
+        table = Table(title="Integration Catalog")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Version")
+        table.add_column("Source")
+        table.add_column("Status")
+
+        for entry in sorted(entries, key=lambda e: e["id"]):
+            eid = entry["id"]
+            cat_name = entry.get("_catalog_name", "")
+            install_allowed = entry.get("_install_allowed", True)
+            if eid == installed_key:
+                status = "[green]installed[/green]"
+            elif eid in INTEGRATION_REGISTRY:
+                status = "built-in"
+            elif install_allowed is False:
+                status = "discovery-only"
+            else:
+                status = ""
+            table.add_row(
+                eid,
+                entry.get("name", eid),
+                entry.get("version", ""),
+                cat_name,
+                status,
+            )
+
+        console.print(table)
+        return
 
     table = Table(title="AI Agent Integrations")
     table.add_column("Key", style="cyan")
@@ -1882,7 +1928,7 @@ def integration_install(
             raw_options=integration_options,
         )
         manifest.save()
-        _write_integration_json(project_root, integration.key, selected_script)
+        _write_integration_json(project_root, integration.key)
         _update_init_options_for_integration(project_root, integration, script_type=selected_script)
 
     except Exception as e:
@@ -1959,6 +2005,7 @@ def _update_init_options_for_integration(
     opts = load_init_options(project_root)
     opts["integration"] = integration.key
     opts["ai"] = integration.key
+    opts["context_file"] = integration.context_file
     if script_type:
         opts["script"] = script_type
     if isinstance(integration, SkillsIntegration):
@@ -2010,6 +2057,7 @@ def integration_uninstall(
             opts.pop("integration", None)
             opts.pop("ai", None)
             opts.pop("ai_skills", None)
+            opts.pop("context_file", None)
             save_init_options(project_root, opts)
         raise typer.Exit(0)
 
@@ -2028,6 +2076,10 @@ def integration_uninstall(
 
     removed, skipped = manifest.uninstall(project_root, force=force)
 
+    # Remove managed context section from the agent context file
+    if integration:
+        integration.remove_context_section(project_root)
+
     _remove_integration_json(project_root)
 
     # Update init-options.json to clear the integration
@@ -2036,6 +2088,7 @@ def integration_uninstall(
         opts.pop("integration", None)
         opts.pop("ai", None)
         opts.pop("ai_skills", None)
+        opts.pop("context_file", None)
         save_init_options(project_root, opts)
 
     name = (integration.config or {}).get("name", key) if integration else key
@@ -2102,6 +2155,7 @@ def integration_switch(
                 )
                 raise typer.Exit(1)
             removed, skipped = old_manifest.uninstall(project_root, force=force)
+            current_integration.remove_context_section(project_root)
             if removed:
                 console.print(f"  Removed {len(removed)} file(s)")
             if skipped:
@@ -2132,6 +2186,7 @@ def integration_switch(
         opts.pop("integration", None)
         opts.pop("ai", None)
         opts.pop("ai_skills", None)
+        opts.pop("context_file", None)
         save_init_options(project_root, opts)
 
     # Ensure shared infrastructure is present (safe to run unconditionally;
@@ -2158,7 +2213,7 @@ def integration_switch(
             raw_options=integration_options,
         )
         manifest.save()
-        _write_integration_json(project_root, target_integration.key, selected_script)
+        _write_integration_json(project_root, target_integration.key)
         _update_init_options_for_integration(project_root, target_integration, script_type=selected_script)
 
     except Exception as e:
@@ -2174,6 +2229,120 @@ def integration_switch(
 
     name = (target_integration.config or {}).get("name", target)
     console.print(f"\n[green]✓[/green] Switched to integration '{name}'")
+
+
+@integration_app.command("upgrade")
+def integration_upgrade(
+    key: str | None = typer.Argument(None, help="Integration key to upgrade (default: current integration)"),
+    force: bool = typer.Option(False, "--force", help="Force upgrade even if files are modified"),
+    script: str | None = typer.Option(None, "--script", help="Script type: sh or ps (default: from init-options.json or platform default)"),
+    integration_options: str | None = typer.Option(None, "--integration-options", help="Options for the integration"),
+):
+    """Upgrade an integration by reinstalling with diff-aware file handling.
+
+    Compares manifest hashes to detect locally modified files and
+    blocks the upgrade unless --force is used.
+    """
+    from .integrations import get_integration
+    from .integrations.manifest import IntegrationManifest
+
+    project_root = Path.cwd()
+
+    specify_dir = project_root / ".specify"
+    if not specify_dir.exists():
+        console.print("[red]Error:[/red] Not a spec-kit project (no .specify/ directory)")
+        console.print("Run this command from a spec-kit project root")
+        raise typer.Exit(1)
+
+    current = _read_integration_json(project_root)
+    installed_key = current.get("integration")
+
+    if key is None:
+        if not installed_key:
+            console.print("[yellow]No integration is currently installed.[/yellow]")
+            raise typer.Exit(0)
+        key = installed_key
+
+    if installed_key and installed_key != key:
+        console.print(
+            f"[red]Error:[/red] Integration '{key}' is not the currently installed integration ('{installed_key}')."
+        )
+        console.print(f"Use [cyan]specify integration switch {key}[/cyan] instead.")
+        raise typer.Exit(1)
+
+    integration = get_integration(key)
+    if integration is None:
+        console.print(f"[red]Error:[/red] Unknown integration '{key}'")
+        raise typer.Exit(1)
+
+    manifest_path = project_root / ".specify" / "integrations" / f"{key}.manifest.json"
+    if not manifest_path.exists():
+        console.print(f"[yellow]No manifest found for integration '{key}'. Nothing to upgrade.[/yellow]")
+        console.print(f"Run [cyan]specify integration install {key}[/cyan] to perform a fresh install.")
+        raise typer.Exit(0)
+
+    try:
+        old_manifest = IntegrationManifest.load(key, project_root)
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]Error:[/red] Integration manifest for '{key}' is unreadable: {exc}")
+        raise typer.Exit(1)
+
+    # Detect modified files via manifest hashes
+    modified = old_manifest.check_modified()
+    if modified and not force:
+        console.print(f"[yellow]⚠[/yellow]  {len(modified)} file(s) have been modified since installation:")
+        for rel in modified:
+            console.print(f"    {rel}")
+        console.print("\nUse [cyan]--force[/cyan] to overwrite modified files, or resolve manually.")
+        raise typer.Exit(1)
+
+    selected_script = _resolve_script_type(project_root, script)
+
+    # Ensure shared infrastructure is present (safe to run unconditionally;
+    # _install_shared_infra merges missing files without overwriting).
+    _install_shared_infra(project_root, selected_script)
+    if os.name != "nt":
+        ensure_executable_scripts(project_root)
+
+    # Phase 1: Install new files (overwrites existing; old-only files remain)
+    console.print(f"Upgrading integration: [cyan]{key}[/cyan]")
+    new_manifest = IntegrationManifest(key, project_root, version=get_speckit_version())
+
+    parsed_options: dict[str, Any] | None = None
+    if integration_options:
+        parsed_options = _parse_integration_options(integration, integration_options)
+
+    try:
+        integration.setup(
+            project_root,
+            new_manifest,
+            parsed_options=parsed_options,
+            script_type=selected_script,
+            raw_options=integration_options,
+        )
+        new_manifest.save()
+        _write_integration_json(project_root, key)
+        _update_init_options_for_integration(project_root, integration, script_type=selected_script)
+    except Exception as exc:
+        # Don't teardown — setup overwrites in-place, so teardown would
+        # delete files that were working before the upgrade.  Just report.
+        console.print(f"[red]Error:[/red] Failed to upgrade integration: {exc}")
+        console.print("[yellow]The previous integration files may still be in place.[/yellow]")
+        raise typer.Exit(1)
+
+    # Phase 2: Remove stale files from old manifest that are not in the new one
+    old_files = old_manifest.files
+    new_files = new_manifest.files
+    stale_keys = set(old_files) - set(new_files)
+    if stale_keys:
+        stale_manifest = IntegrationManifest(key, project_root, version="stale-cleanup")
+        stale_manifest._files = {k: old_files[k] for k in stale_keys}
+        stale_removed, _ = stale_manifest.uninstall(project_root, force=True)
+        if stale_removed:
+            console.print(f"  Removed {len(stale_removed)} stale file(s) from previous install")
+
+    name = (integration.config or {}).get("name", key)
+    console.print(f"\n[green]✓[/green] Integration '{name}' upgraded successfully")
 
 
 # ===== Preset Commands =====
@@ -2216,7 +2385,7 @@ def preset_list():
 
 @preset_app.command("add")
 def preset_add(
-    pack_id: str = typer.Argument(None, help="Preset ID to install from catalog"),
+    preset_id: str = typer.Argument(None, help="Preset ID to install from catalog"),
     from_url: str = typer.Option(None, "--from", help="Install from a URL (ZIP file)"),
     dev: str = typer.Option(None, "--dev", help="Install from local directory (development mode)"),
     priority: int = typer.Option(10, "--priority", help="Resolution priority (lower = higher precedence, default 10)"),
@@ -2284,19 +2453,19 @@ def preset_add(
 
             console.print(f"[green]✓[/green] Preset '{manifest.name}' v{manifest.version} installed (priority {priority})")
 
-        elif pack_id:
+        elif preset_id:
             # Try bundled preset first, then catalog
-            bundled_path = _locate_bundled_preset(pack_id)
+            bundled_path = _locate_bundled_preset(preset_id)
             if bundled_path:
-                console.print(f"Installing bundled preset [cyan]{pack_id}[/cyan]...")
+                console.print(f"Installing bundled preset [cyan]{preset_id}[/cyan]...")
                 manifest = manager.install_from_directory(bundled_path, speckit_version, priority)
                 console.print(f"[green]✓[/green] Preset '{manifest.name}' v{manifest.version} installed (priority {priority})")
             else:
                 catalog = PresetCatalog(project_root)
-                pack_info = catalog.get_pack_info(pack_id)
+                pack_info = catalog.get_pack_info(preset_id)
 
                 if not pack_info:
-                    console.print(f"[red]Error:[/red] Preset '{pack_id}' not found in catalog")
+                    console.print(f"[red]Error:[/red] Preset '{preset_id}' not found in catalog")
                     raise typer.Exit(1)
 
                 # Bundled presets should have been caught above; if we reach
@@ -2304,7 +2473,7 @@ def preset_add(
                 if pack_info.get("bundled") and not pack_info.get("download_url"):
                     from .extensions import REINSTALL_COMMAND
                     console.print(
-                        f"[red]Error:[/red] Preset '{pack_id}' is bundled with spec-kit "
+                        f"[red]Error:[/red] Preset '{preset_id}' is bundled with spec-kit "
                         f"but could not be found in the installed package."
                     )
                     console.print(
@@ -2316,14 +2485,14 @@ def preset_add(
 
                 if not pack_info.get("_install_allowed", True):
                     catalog_name = pack_info.get("_catalog_name", "unknown")
-                    console.print(f"[red]Error:[/red] Preset '{pack_id}' is from the '{catalog_name}' catalog which is discovery-only (install not allowed).")
+                    console.print(f"[red]Error:[/red] Preset '{preset_id}' is from the '{catalog_name}' catalog which is discovery-only (install not allowed).")
                     console.print("Add the catalog with --install-allowed or install from the preset's repository directly with --from.")
                     raise typer.Exit(1)
 
-                console.print(f"Installing preset [cyan]{pack_info.get('name', pack_id)}[/cyan]...")
+                console.print(f"Installing preset [cyan]{pack_info.get('name', preset_id)}[/cyan]...")
 
                 try:
-                    zip_path = catalog.download_pack(pack_id)
+                    zip_path = catalog.download_pack(preset_id)
                     manifest = manager.install_from_zip(zip_path, speckit_version, priority)
                     console.print(f"[green]✓[/green] Preset '{manifest.name}' v{manifest.version} installed (priority {priority})")
                 finally:
@@ -2346,7 +2515,7 @@ def preset_add(
 
 @preset_app.command("remove")
 def preset_remove(
-    pack_id: str = typer.Argument(..., help="Preset ID to remove"),
+    preset_id: str = typer.Argument(..., help="Preset ID to remove"),
 ):
     """Remove an installed preset."""
     from .presets import PresetManager
@@ -2361,14 +2530,14 @@ def preset_remove(
 
     manager = PresetManager(project_root)
 
-    if not manager.registry.is_installed(pack_id):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' is not installed")
+    if not manager.registry.is_installed(preset_id):
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' is not installed")
         raise typer.Exit(1)
 
-    if manager.remove(pack_id):
-        console.print(f"[green]✓[/green] Preset '{pack_id}' removed successfully")
+    if manager.remove(preset_id):
+        console.print(f"[green]✓[/green] Preset '{preset_id}' removed successfully")
     else:
-        console.print(f"[red]Error:[/red] Failed to remove preset '{pack_id}'")
+        console.print(f"[red]Error:[/red] Failed to remove preset '{preset_id}'")
         raise typer.Exit(1)
 
 
@@ -2439,7 +2608,7 @@ def preset_resolve(
 
 @preset_app.command("info")
 def preset_info(
-    pack_id: str = typer.Argument(..., help="Preset ID to get info about"),
+    preset_id: str = typer.Argument(..., help="Preset ID to get info about"),
 ):
     """Show detailed information about a preset."""
     from .extensions import normalize_priority
@@ -2455,7 +2624,7 @@ def preset_info(
 
     # Check if installed locally first
     manager = PresetManager(project_root)
-    local_pack = manager.get_pack(pack_id)
+    local_pack = manager.get_pack(preset_id)
 
     if local_pack:
         console.print(f"\n[bold cyan]Preset: {local_pack.name}[/bold cyan]\n")
@@ -2477,7 +2646,7 @@ def preset_info(
             console.print(f"  License:     {license_val}")
         console.print("\n  [green]Status: installed[/green]")
         # Get priority from registry
-        pack_metadata = manager.registry.get(pack_id)
+        pack_metadata = manager.registry.get(preset_id)
         priority = normalize_priority(pack_metadata.get("priority") if isinstance(pack_metadata, dict) else None)
         console.print(f"  [dim]Priority:[/dim] {priority}")
         console.print()
@@ -2486,15 +2655,15 @@ def preset_info(
     # Fall back to catalog
     catalog = PresetCatalog(project_root)
     try:
-        pack_info = catalog.get_pack_info(pack_id)
+        pack_info = catalog.get_pack_info(preset_id)
     except PresetError:
         pack_info = None
 
     if not pack_info:
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' not found (not installed and not in catalog)")
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' not found (not installed and not in catalog)")
         raise typer.Exit(1)
 
-    console.print(f"\n[bold cyan]Preset: {pack_info.get('name', pack_id)}[/bold cyan]\n")
+    console.print(f"\n[bold cyan]Preset: {pack_info.get('name', preset_id)}[/bold cyan]\n")
     console.print(f"  ID:          {pack_info['id']}")
     console.print(f"  Version:     {pack_info.get('version', '?')}")
     console.print(f"  Description: {pack_info.get('description', '')}")
@@ -2507,13 +2676,13 @@ def preset_info(
     if pack_info.get("license"):
         console.print(f"  License:     {pack_info['license']}")
     console.print("\n  [yellow]Status: not installed[/yellow]")
-    console.print(f"  Install with: [cyan]specify preset add {pack_id}[/cyan]")
+    console.print(f"  Install with: [cyan]specify preset add {preset_id}[/cyan]")
     console.print()
 
 
 @preset_app.command("set-priority")
 def preset_set_priority(
-    pack_id: str = typer.Argument(help="Preset ID"),
+    preset_id: str = typer.Argument(help="Preset ID"),
     priority: int = typer.Argument(help="New priority (lower = higher precedence)"),
 ):
     """Set the resolution priority of an installed preset."""
@@ -2536,14 +2705,14 @@ def preset_set_priority(
     manager = PresetManager(project_root)
 
     # Check if preset is installed
-    if not manager.registry.is_installed(pack_id):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' is not installed")
+    if not manager.registry.is_installed(preset_id):
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' is not installed")
         raise typer.Exit(1)
 
     # Get current metadata
-    metadata = manager.registry.get(pack_id)
+    metadata = manager.registry.get(preset_id)
     if metadata is None or not isinstance(metadata, dict):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' not found in registry (corrupted state)")
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' not found in registry (corrupted state)")
         raise typer.Exit(1)
 
     from .extensions import normalize_priority
@@ -2551,21 +2720,21 @@ def preset_set_priority(
     # Only skip if the stored value is already a valid int equal to requested priority
     # This ensures corrupted values (e.g., "high") get repaired even when setting to default (10)
     if isinstance(raw_priority, int) and raw_priority == priority:
-        console.print(f"[yellow]Preset '{pack_id}' already has priority {priority}[/yellow]")
+        console.print(f"[yellow]Preset '{preset_id}' already has priority {priority}[/yellow]")
         raise typer.Exit(0)
 
     old_priority = normalize_priority(raw_priority)
 
     # Update priority
-    manager.registry.update(pack_id, {"priority": priority})
+    manager.registry.update(preset_id, {"priority": priority})
 
-    console.print(f"[green]✓[/green] Preset '{pack_id}' priority changed: {old_priority} → {priority}")
+    console.print(f"[green]✓[/green] Preset '{preset_id}' priority changed: {old_priority} → {priority}")
     console.print("\n[dim]Lower priority = higher precedence in template resolution[/dim]")
 
 
 @preset_app.command("enable")
 def preset_enable(
-    pack_id: str = typer.Argument(help="Preset ID to enable"),
+    preset_id: str = typer.Argument(help="Preset ID to enable"),
 ):
     """Enable a disabled preset."""
     from .presets import PresetManager
@@ -2582,31 +2751,31 @@ def preset_enable(
     manager = PresetManager(project_root)
 
     # Check if preset is installed
-    if not manager.registry.is_installed(pack_id):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' is not installed")
+    if not manager.registry.is_installed(preset_id):
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' is not installed")
         raise typer.Exit(1)
 
     # Get current metadata
-    metadata = manager.registry.get(pack_id)
+    metadata = manager.registry.get(preset_id)
     if metadata is None or not isinstance(metadata, dict):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' not found in registry (corrupted state)")
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' not found in registry (corrupted state)")
         raise typer.Exit(1)
 
     if metadata.get("enabled", True):
-        console.print(f"[yellow]Preset '{pack_id}' is already enabled[/yellow]")
+        console.print(f"[yellow]Preset '{preset_id}' is already enabled[/yellow]")
         raise typer.Exit(0)
 
     # Enable the preset
-    manager.registry.update(pack_id, {"enabled": True})
+    manager.registry.update(preset_id, {"enabled": True})
 
-    console.print(f"[green]✓[/green] Preset '{pack_id}' enabled")
+    console.print(f"[green]✓[/green] Preset '{preset_id}' enabled")
     console.print("\nTemplates from this preset will now be included in resolution.")
     console.print("[dim]Note: Previously registered commands/skills remain active.[/dim]")
 
 
 @preset_app.command("disable")
 def preset_disable(
-    pack_id: str = typer.Argument(help="Preset ID to disable"),
+    preset_id: str = typer.Argument(help="Preset ID to disable"),
 ):
     """Disable a preset without removing it."""
     from .presets import PresetManager
@@ -2623,27 +2792,27 @@ def preset_disable(
     manager = PresetManager(project_root)
 
     # Check if preset is installed
-    if not manager.registry.is_installed(pack_id):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' is not installed")
+    if not manager.registry.is_installed(preset_id):
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' is not installed")
         raise typer.Exit(1)
 
     # Get current metadata
-    metadata = manager.registry.get(pack_id)
+    metadata = manager.registry.get(preset_id)
     if metadata is None or not isinstance(metadata, dict):
-        console.print(f"[red]Error:[/red] Preset '{pack_id}' not found in registry (corrupted state)")
+        console.print(f"[red]Error:[/red] Preset '{preset_id}' not found in registry (corrupted state)")
         raise typer.Exit(1)
 
     if not metadata.get("enabled", True):
-        console.print(f"[yellow]Preset '{pack_id}' is already disabled[/yellow]")
+        console.print(f"[yellow]Preset '{preset_id}' is already disabled[/yellow]")
         raise typer.Exit(0)
 
     # Disable the preset
-    manager.registry.update(pack_id, {"enabled": False})
+    manager.registry.update(preset_id, {"enabled": False})
 
-    console.print(f"[green]✓[/green] Preset '{pack_id}' disabled")
+    console.print(f"[green]✓[/green] Preset '{preset_id}' disabled")
     console.print("\nTemplates from this preset will be skipped during resolution.")
     console.print("[dim]Note: Previously registered commands/skills remain active until preset removal.[/dim]")
-    console.print(f"To re-enable: specify preset enable {pack_id}")
+    console.print(f"To re-enable: specify preset enable {preset_id}")
 
 
 # ===== Preset Catalog Commands =====
@@ -3318,6 +3487,10 @@ def extension_add(
         console.print("\n[green]✓[/green] Extension installed successfully!")
         console.print(f"\n[bold]{manifest.name}[/bold] (v{manifest.version})")
         console.print(f"  {manifest.description}")
+
+        for warning in manifest.warnings:
+            console.print(f"\n[yellow]⚠  Compatibility warning:[/yellow] {warning}")
+
         console.print("\n[bold cyan]Provided commands:[/bold cyan]")
         for cmd in manifest.commands:
             console.print(f"  • {cmd['name']} - {cmd.get('description', '')}")
@@ -3371,15 +3544,28 @@ def extension_remove(
 
     # Get extension info for command and skill counts
     ext_manifest = manager.get_extension(extension_id)
-    cmd_count = len(ext_manifest.commands) if ext_manifest else 0
     reg_meta = manager.registry.get(extension_id)
+    # Derive cmd_count from the registry's registered_commands (includes aliases)
+    # rather than from the manifest (primary commands only). Use max() across
+    # agents to get the per-agent count; sum() would double-count since users
+    # think in logical commands, not per-agent file counts.
+    # Use get() without a default so we can distinguish "key missing" (fall back
+    # to manifest) from "key present but empty dict" (zero commands registered).
+    registered_commands = reg_meta.get("registered_commands") if isinstance(reg_meta, dict) else None
+    if isinstance(registered_commands, dict):
+        cmd_count = max(
+            (len(v) for v in registered_commands.values() if isinstance(v, list)),
+            default=0,
+        )
+    else:
+        cmd_count = len(ext_manifest.commands) if ext_manifest else 0
     raw_skills = reg_meta.get("registered_skills") if reg_meta else None
     skill_count = len(raw_skills) if isinstance(raw_skills, list) else 0
 
     # Confirm removal
     if not force:
         console.print("\n[yellow]⚠  This will remove:[/yellow]")
-        console.print(f"   • {cmd_count} commands from AI agent")
+        console.print(f"   • {cmd_count} command{'s' if cmd_count != 1 else ''} per agent")
         if skill_count:
             console.print(f"   • {skill_count} agent skill(s)")
         console.print(f"   • Extension directory: .specify/extensions/{extension_id}/")
