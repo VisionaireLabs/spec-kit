@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -332,6 +333,44 @@ class TestExpressions:
         result = evaluate_expression("{{ steps.tasks.output.task_list[0].file }}", ctx)
         assert result == "a.md"
 
+    def test_context_run_id_resolves(self):
+        """``{{ context.run_id }}`` resolves to ``StepContext.run_id``.
+
+        Locks the contract from issue #2590: workflow templates can
+        reference the engine-assigned run id for telemetry, artifact
+        metadata, or per-run scratch isolation.
+        """
+        from specify_cli.workflows.expressions import evaluate_expression
+        from specify_cli.workflows.base import StepContext
+
+        ctx = StepContext(run_id="a1b2c3d4")
+        assert evaluate_expression("{{ context.run_id }}", ctx) == "a1b2c3d4"
+
+    def test_context_run_id_defaults_to_empty_when_unset(self):
+        """``{{ context.run_id }}`` resolves to ``""`` when no run is
+        active (dry-run, validation, ad-hoc evaluator usage) rather
+        than raising — workflows referencing the variable never error
+        outside a run context.
+        """
+        from specify_cli.workflows.expressions import evaluate_expression
+        from specify_cli.workflows.base import StepContext
+
+        # No run_id set on the context.
+        ctx = StepContext()
+        assert evaluate_expression("{{ context.run_id }}", ctx) == ""
+
+    def test_context_run_id_string_interpolation(self):
+        """Run id interpolates inside a larger template string — the
+        common pattern for stamping shell commands and artifact paths
+        with the run id.
+        """
+        from specify_cli.workflows.expressions import evaluate_expression
+        from specify_cli.workflows.base import StepContext
+
+        ctx = StepContext(run_id="deadbeef")
+        result = evaluate_expression("RUN_ID={{ context.run_id }}", ctx)
+        assert result == "RUN_ID=deadbeef"
+
 
 # ===== Integration Dispatch Tests =====
 
@@ -373,7 +412,8 @@ class TestBuildExecArgs:
         from specify_cli.integrations.copilot import CopilotIntegration
         impl = CopilotIntegration()
         args = impl.build_exec_args("do stuff", model="claude-sonnet-4-20250514")
-        assert args[0] == "copilot"
+        expected_exec = "copilot.cmd" if os.name == "nt" else "copilot"
+        assert args[0] == expected_exec
         assert "-p" in args
         assert "--yolo" in args
         assert "--model" in args
@@ -2150,6 +2190,189 @@ steps:
         assert "retry-loop:step-b:1" in state.step_results
         assert "retry-loop:step-a:2" in state.step_results
         assert "retry-loop:step-b:2" in state.step_results
+
+
+# ===== context.run_id Tests =====
+#
+# End-to-end coverage for the `{{ context.run_id }}` template
+# variable introduced in issue #2590. Locks resolution inside the
+# three step types the acceptance criteria called out — shell `run:`,
+# command `input.args:`, and switch `expression:` — plus the
+# "workflow doesn't reference it" backward-compat path.
+
+
+class TestContextRunId:
+    """End-to-end tests for `{{ context.run_id }}` in workflow YAML."""
+
+    def test_shell_run_resolves_run_id(self, project_dir):
+        """`run: "echo {{ context.run_id }}"` substitutes the
+        engine-assigned run id into the spawned shell, and the
+        same value appears on `state.run_id`.
+        """
+        from specify_cli.workflows.engine import WorkflowDefinition, WorkflowEngine
+
+        definition = WorkflowDefinition.from_string("""
+schema_version: "1.0"
+workflow:
+  id: "stamp-run-id"
+  name: "Stamp Run Id"
+  version: "1.0.0"
+steps:
+  - id: stamp
+    type: shell
+    run: "echo RUN_ID={{ context.run_id }}"
+""")
+        engine = WorkflowEngine(project_dir)
+        state = engine.execute(definition, run_id="abc12345")
+
+        assert state.run_id == "abc12345"
+        stdout = state.step_results["stamp"]["output"]["stdout"]
+        assert stdout.strip() == "RUN_ID=abc12345"
+
+    def test_command_input_args_resolves_run_id(self, project_dir):
+        """`input.args: "{{ context.run_id }}"` is resolved by
+        `CommandStep` and recorded in step output, even when CLI
+        dispatch is unavailable (no integration installed). Covers
+        the artifact-metadata use case from the issue.
+        """
+        from unittest.mock import patch
+        from specify_cli.workflows.engine import WorkflowDefinition, WorkflowEngine
+
+        definition = WorkflowDefinition.from_string("""
+schema_version: "1.0"
+workflow:
+  id: "command-stamp"
+  name: "Command Stamp"
+  version: "1.0.0"
+  integration: claude
+steps:
+  - id: tag-artifact
+    command: speckit.specify
+    input:
+      args: "{{ context.run_id }}"
+""")
+        engine = WorkflowEngine(project_dir)
+        with patch(
+            "specify_cli.workflows.steps.command.shutil.which",
+            return_value=None,
+        ):
+            state = engine.execute(definition, run_id="cafef00d")
+
+        # Even when dispatch fails (no CLI), the resolved input is
+        # recorded so downstream observers see the run id in artifact
+        # metadata.
+        assert state.step_results["tag-artifact"]["output"]["input"]["args"] == "cafef00d"
+
+    def test_switch_expression_matches_on_run_id(self, project_dir):
+        """`switch` over `{{ context.run_id }}` matches against case
+        keys, and the nested branch can ALSO reference
+        `{{ context.run_id }}`. Demonstrates the run id is a
+        first-class value in the expression engine (not just a
+        string-interpolation token) AND that it propagates into
+        nested step execution via the recursive `_execute_steps`
+        traversal.
+        """
+        from specify_cli.workflows.engine import WorkflowDefinition, WorkflowEngine
+        from specify_cli.workflows.base import RunStatus
+
+        definition = WorkflowDefinition.from_string("""
+schema_version: "1.0"
+workflow:
+  id: "switch-on-run-id"
+  name: "Switch On Run Id"
+  version: "1.0.0"
+steps:
+  - id: route
+    type: switch
+    expression: "{{ context.run_id }}"
+    cases:
+      target-run:
+        - id: matched-branch
+          type: shell
+          run: "echo nested-run-id={{ context.run_id }}"
+    default:
+      - id: default-branch
+        type: shell
+        run: "echo defaulted"
+""")
+        engine = WorkflowEngine(project_dir)
+        state = engine.execute(definition, run_id="target-run")
+
+        assert state.status == RunStatus.COMPLETED
+        assert state.step_results["route"]["output"]["matched_case"] == "target-run"
+        assert "matched-branch" in state.step_results
+        assert "default-branch" not in state.step_results
+        # The nested branch sees the same run id — propagation through
+        # recursive `_execute_steps` is intact.
+        nested_stdout = state.step_results["matched-branch"]["output"]["stdout"]
+        assert nested_stdout.strip() == "nested-run-id=target-run"
+
+    def test_workflow_without_context_reference_unchanged(self, project_dir):
+        """Workflows that do not reference `{{ context.run_id }}`
+        continue to run exactly as before. Locks the byte-equivalent
+        default required by the issue's acceptance criteria.
+        """
+        from specify_cli.workflows.engine import WorkflowDefinition, WorkflowEngine
+        from specify_cli.workflows.base import RunStatus
+
+        definition = WorkflowDefinition.from_string("""
+schema_version: "1.0"
+workflow:
+  id: "no-context-ref"
+  name: "No Context Ref"
+  version: "1.0.0"
+steps:
+  - id: only-step
+    type: shell
+    run: "echo hello"
+""")
+        engine = WorkflowEngine(project_dir)
+        state = engine.execute(definition)
+
+        assert state.status == RunStatus.COMPLETED
+        assert state.step_results["only-step"]["output"]["stdout"].strip() == "hello"
+
+    def test_run_id_uses_speckit_workflow_run_id_env_override(self, project_dir, monkeypatch):
+        """When no run_id argument is provided, SPECKIT_WORKFLOW_RUN_ID overrides the auto-generated run ID."""
+        from specify_cli.workflows.engine import WorkflowDefinition, WorkflowEngine
+
+        monkeypatch.setenv("SPECKIT_WORKFLOW_RUN_ID", "env-run-123")
+        definition = WorkflowDefinition.from_string("""
+schema_version: "1.0"
+workflow:
+  id: "env-run-id"
+  name: "Env Run Id"
+  version: "1.0.0"
+steps:
+  - id: stamp
+    type: shell
+    run: "echo {{ context.run_id }}"
+""")
+        state = WorkflowEngine(project_dir).execute(definition)
+
+        assert state.run_id == "env-run-123"
+        assert state.step_results["stamp"]["output"]["stdout"].strip() == "env-run-123"
+
+    def test_run_id_arg_takes_precedence_over_env_override(self, project_dir, monkeypatch):
+        """Explicit run_id keeps existing precedence over SPECKIT_WORKFLOW_RUN_ID."""
+        from specify_cli.workflows.engine import WorkflowDefinition, WorkflowEngine
+
+        monkeypatch.setenv("SPECKIT_WORKFLOW_RUN_ID", "env-run-123")
+        definition = WorkflowDefinition.from_string("""
+schema_version: "1.0"
+workflow:
+  id: "explicit-run-id"
+  name: "Explicit Run Id"
+  version: "1.0.0"
+steps:
+  - id: stamp
+    type: shell
+    run: "echo {{ context.run_id }}"
+""")
+        state = WorkflowEngine(project_dir).execute(definition, run_id="explicit-456")
+
+        assert state.run_id == "explicit-456"
+        assert state.step_results["stamp"]["output"]["stdout"].strip() == "explicit-456"
 
 
 # ===== State Persistence Tests =====
