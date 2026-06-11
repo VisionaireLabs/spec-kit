@@ -46,6 +46,39 @@
 
 ---
 
+## Validation Quickstart
+
+<!-- How to prove this works end-to-end once implemented -->
+
+### Prerequisites
+- [e.g., Node 20+, pnpm, PostgreSQL running]
+- [environment variables needed]
+
+### Setup
+```bash
+# [clone/install commands]
+pnpm install
+cp .env.example .env.local
+# [edit .env.local with required values]
+pnpm db:push  # if using database
+```
+
+### Run/Test
+```bash
+# [commands to start dev server, run tests, or validate feature]
+pnpm dev
+# visit http://localhost:3000/[route]
+```
+
+### Expected Outcomes
+- [e.g., "User can log in with OAuth and see dashboard"]
+- [e.g., "API endpoint returns 200 with correct schema"]
+- [e.g., "Tests pass: pnpm test"]
+
+**Contracts & Models**: See `data-model.md` and `/contracts/*` for API/data details.
+
+---
+
 ## Project Structure
 
 ```

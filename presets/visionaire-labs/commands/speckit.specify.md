@@ -35,13 +35,14 @@ The feature description in the user's message is your primary input. Don't ask t
    - "Fix payment timeout" → `fix-payment-timeout`
 
 2. **Create the feature branch** by running the script with `--short-name` (and `--json`):
-   - Check `.specify/init-options.json` for `branch_numbering` value
+   - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated)
    - Bash: `{SCRIPT} --json --short-name "feature-name" "Full feature description"`
    - Bash (timestamp mode): `{SCRIPT} --json --timestamp --short-name "feature-name" "..."`
    - PowerShell: `{SCRIPT} -Json -ShortName "feature-name" "Full feature description"`
    - Never pass `--number` — script handles numbering
    - Run the script exactly once
    - Parse JSON output for BRANCH_NAME and SPEC_FILE
+   - If using deprecated `branch_numbering`, emit warning: "⚠️ `branch_numbering` is deprecated. Rename to `feature_numbering`."
 
 3. **Load the spec template**: `.specify/templates/spec-template.md`
 
